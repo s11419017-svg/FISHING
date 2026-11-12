@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Three.js r187 高精度 3D 擬真釣魚遊戲</title>
+    <style>
+        * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+
+        /* UI 覆蓋層 */
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; display: flex; flex-direction: column; justify-content: space-between;
+            padding: 24px; color: #fff; text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+        }
+
+        /* 頂部資訊欄 */
+        .top-bar {
+            display: flex; justify-content: space-between; align-items: flex-start;
+        }
+        .stats-card {
+            background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 12px;
+            padding: 14px 20px; min-width: 220px; box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        }
+        .stats-title { font-size: 13px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+        .stats-value { font-size: 24px; font-weight: 700; color: #38bdf8; }
+        .stats-sub { font-size: 13px; color: #cbd5e1; margin-top: 4px; }
+
+        /* 中央狀態提示 */
+        #center-prompt {
+            position: absolute; top: 28%; left: 50%; transform: translate(-50%, -50%);
+            text-align: center; pointer-events: none;
+        }
+        .status-badge {
+            display: inline-block; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(6px);
+            padding: 12px 28px; border-radius: 30px; font-size: 20px; font-weight: 600;
+            border: 1px solid rgba(255,255,255,0.2); transition: all 0.25s ease;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+        .status-bite {
+            background: rgba(220, 38, 38, 0.9) !important;
+            border-color: #fca5a5 !important;
+            transform: scale(1.15);
+            animation: pulse 0.4s infinite alternate;
+        }
+        @keyframes pulse {
+            from { transform: scale(1.1); box-shadow: 0 0 15px rgba(239, 68, 68, 0.8); }
+            to { transform: scale(1.22); box-shadow: 0 0 30px rgba(239, 68, 68, 1); }
+        }
+
+        /* 蓄力與張力儀表板 (右側/中央偏下) */
+        #hud-meters {
+            position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%);
+            width: 420px; display: flex; flex-direction: column; gap: 14px;
+            background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(10px);
+            padding: 18px 22px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.15);
+            opacity: 0; transition: opacity 0.25s ease;
+        }
+        #hud-meters.active { opacity: 1; }
+
+        .meter-row { display: flex; flex-direction: column; gap: 6px; }
+        .meter-label { display: flex; justify-content: space-between; font-size: 14px; font-weight: 600; }
+        .meter-bar-bg {
+            width: 100%; height: 14px; background: rgba(255,255,255,0.12);
+            border-radius: 7px; overflow: hidden; position: relative;
+        }
+        .meter-bar-fill {
+            height: 100%; width: 0%; border-radius: 7px; transition: width 0.05s linear;
+        }
+        /* 安全區標示 */
+        .tension-safe-zone {
+            position: absolute; top: 0; left: 25%; width: 55%; height: 100%;
+            border-left: 2px dashed rgba(255,255,255,0.6);
+            border-right: 2px dashed rgba(255,255,255,0.6);
+            pointer-events: none;
+        }
+
+        /* 漁獲結算彈窗 */
+        #catch-modal {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.9);
+            background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(16px);
+            border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 20px;
+            padding: 28px 36px; text-align: center; pointer-events: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.8); opacity: 0; visibility: hidden;
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            min-width: 320px;
+        }
+        #catch-modal.show { opacity: 1; visibility: visible; transform: translate(-50%, -50%) scale(1); }
+        .fish-rarity { font-size: 13px; font-weight: 800; padding: 4px 12px; border-radius: 12px; display: inline-block; margin-bottom: 8px; }
+        .fish-name { font-size: 28px; font-weight: 800; margin: 4px 0 12px; color: #f8fafc; }
+        .fish-details { font-size: 16px; color: #94a3b8; margin-bottom: 20px; line-height: 1.6; }
+        .btn-continue {
+            background: linear-gradient(135deg, #0284c7, #2563eb); color: white; border: none;
+            padding: 10px 28px; font-size: 16px; font-weight: 600; border-radius: 10px;
+            cursor: pointer; box-shadow: 0 4px 15px rgba(37, 99, 235, 0.4); transition: transform 0.15s;
+        }
+        .btn-continue:hover { transform: translateY(-2px); }
+
+        /* 底部操作說明 */
+        .bottom-controls {
+            text-align: center; font-size: 14px; color: #cbd5e1;
+            background: rgba(15, 23, 42, 0.65); padding: 10px 24px; border-radius: 20px;
+            align-self: center; backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1);
+        }
+        kbd {
+            background: #334155; padding: 2px 8px; border-radius: 4px; font-size: 12px;
+            border-bottom: 2px solid #1e293b; margin: 0 4px; color: #f8fafc;
+        }
+    </style>
+
+    <!-- 使用 Import Map 載入最新 Three.js 核心與附加組件 (支援 r187+ 標準 API) -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@latest/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@latest/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+
+<div id="ui-layer">
+    <div class="top-bar">
+        <div class="stats-card">
+            <div class="stats-title">漁獲統計 (Catch Log)</div>
+            <div class="stats-value"><span id="ui-count">0</span> 尾 / <span id="ui-weight">0.00</span> kg</div>
+            <div class="stats-sub" id="ui-best">最大紀錄: 尚無</div>
+        </div>
+        <div class="stats-card" style="text-align: right;">
+            <div class="stats-title">水域環境 (Environment)</div>
+            <div class="stats-value" style="color: #fbbf24; font-size: 20px;">翡翠高山湖泊</div>
+            <div class="stats-sub">水深: 4.5m ~ 18.0m | 活性: 極高</div>
+        </div>
+    </div>
+
+    <div id="center-prompt">
+        <div id="status-badge" class="status-badge">按住 [滑鼠左鍵] 或 [空白鍵] 蓄力拋竿</div>
+    </div>
+
+    <!-- 動態蓄力/搏魚張力計 -->
+    <div id="hud-meters">
+        <div class="meter-row" id="power-row">
+            <div class="meter-label">
+                <span>拋竿力道 (Cast Power)</span>
+                <span id="power-text">0%</span>
+            </div>
+            <div class="meter-bar-bg">
+                <div id="power-fill" class="meter-bar-fill" style="background: linear-gradient(90deg, #22c55e, #eab308, #ef4444);"></div>
+            </div>
+        </div>
+
+        <div class="meter-row" id="tension-row" style="display: none;">
+            <div class="meter-label">
+                <span>釣線張力 (Line Tension)</span>
+                <span id="tension-text">穩定</span>
+            </div>
+            <div class="meter-bar-bg">
+                <div class="tension-safe-zone"></div>
+                <div id="tension-fill" class="meter-bar-fill" style="background: #38bdf8;"></div>
+            </div>
+        </div>
+
+        <div class="meter-row" id="dist-row" style="display: none;">
+            <div class="meter-label">
+                <span>魚隻距離 (Distance)</span>
+                <span id="dist-text">25.0 m</span>
+            </div>
+            <div class="meter-bar-bg">
+                <div id="dist-fill" class="meter-bar-fill" style="background: #a855f7;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 漁獲彈窗 -->
+    <div id="catch-modal">
+        <div id="modal-rarity" class="fish-rarity">SSR 傳說</div>
+        <div id="modal-name" class="fish-name">黃金帝王鮭</div>
+        <div id="modal-details" class="fish-details">重量: 8.42 kg<br>體長: 94.5 cm</div>
+        <button class="btn-continue" id="btn-close-modal">收入魚護 (空白鍵繼續)</button>
+    </div>
+
+    <div class="bottom-controls">
+        操作指南：按住 <kbd>滑鼠左鍵</kbd> 或 <kbd>Space</kbd> 蓄力拋竿 ｜ 浮標下沉時點擊揚竿刺魚 ｜ 搏魚時按住收線、放開降張力
+    </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { Sky } from 'three/addons/objects/Sky.js';
+
+// ==========================================
+// 1. 遊戲狀態與魚種資料庫
+// ==========================================
+const STATE = {
+    IDLE: 'IDLE',           // 待機準備拋竿
+    CHARGING: 'CHARGING',   // 拋竿蓄力中
+    CASTING: 'CASTING',     // 浮標飛行中
+    WAITING: 'WAITING',     // 等待魚兒咬鉤
+    BITE: 'BITE',           // 魚咬鉤！(需及時拉竿)
+    REELING: 'REELING',     // 搏魚拉鋸戰中
+    CAUGHT: 'CAUGHT'        // 釣獲展示中
+};
+
+const FISH_DATABASE = [
+    { name: '溪流苦花', rarity: 'N 普通', color: '#94a3b8', bodyColor: 0x94a3b8, finColor: 0x64748b, minW: 0.3, maxW: 1.2, pull: 0.6, speed: 1.0 },
+    { name: '翡翠大口鱸', rarity: 'R 稀有', color: '#4ade80', bodyColor: 0x22c55e, finColor: 0x15803d, minW: 1.5, maxW: 4.5, pull: 1.0, speed: 1.3 },
+    { name: '櫻花鉤吻鮭', rarity: 'SR 珍貴', color: '#f472b6', bodyColor: 0xf43f5e, finColor: 0x881337, minW: 2.2, maxW: 6.8, pull: 1.35, speed: 1.6 },
+    { name: '深淵藍鰭鱒', rarity: 'SR 珍貴', color: '#38bdf8', bodyColor: 0x0284c7, finColor: 0x1e3a8a, minW: 3.5, maxW: 9.2, pull: 1.6, speed: 1.8 },
+    { name: '黃金帝王鮭', rarity: 'SSR 傳說', color: '#fbbf24', bodyColor: 0xf59e0b, finColor: 0xb45309, minW: 7.0, maxW: 16.5, pull: 2.1, speed: 2.2 }
+];
+
+let gameState = STATE.IDLE;
+let isInputDown = false;
+let castPower = 0;
+let castChargeDir = 1;
+
+// 釣魚物理與搏魚參數
+let bobberVelocity = new THREE.Vector3();
+let biteTimer = 0;
+let nibbleTimer = 0;
+let hookWindowTimer = 0;
+let currentFish = null;
+let currentFishWeight = 0;
+let lineTension = 30;     // 0 ~ 100 (0=脫鉤, 100=斷線)
+let fishDistance = 20;    // 魚距離岸邊公尺數
+let maxCastDistance = 20;
+let fishStamina = 100;
+let fishBurstTimer = 0;
+let isFishBursting = false;
+let reelRotationSpeed = 0;
+
+// 統計資料
+let totalCount = 0;
+let totalWeight = 0;
+let bestFish = { name: '', weight: 0 };
+
+// ==========================================
+// 2. 初始化 Three.js r187+ 場景與渲染器
+// ==========================================
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x1e293b, 0.006);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 2.3, 6.2);
+camera.lookAt(0, 1.0, -15);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.85;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// 使用 r187 推薦的 THREE.Timer 取代已棄用的 THREE.Clock
+const timer = new THREE.Timer();
+
+// ==========================================
+// 3. 天空、光源與環境系統
+// ==========================================
+const sky = new Sky();
+sky.scale.setScalar(1000);
+scene.add(sky);
+
+const sunPosition = new THREE.Vector3();
+const skyUniforms = sky.material.uniforms;
+skyUniforms['turbidity'].value = 8;
+skyUniforms['rayleigh'].value = 2.5;
+skyUniforms['mieCoefficient'].value = 0.005;
+skyUniforms['mieDirectionalG'].value = 0.8;
+
+// 設定黃昏黃金時刻太陽角度
+const phi = THREE.MathUtils.degToRad(90 - 12);
+const theta = THREE.MathUtils.degToRad(195);
+sunPosition.setFromSphericalCoords(1, phi, theta);
+skyUniforms['sunPosition'].value.copy(sunPosition);
+
+// 產生 PMREM 環境貼圖讓水面與釣竿具備高精度反射
+const pmremGenerator = new THREE.PMREMGenerator(renderer);
+scene.environment = pmremGenerator.fromScene(sky).texture;
+
+const dirLight = new THREE.DirectionalLight(0xffdfa5, 2.8);
+dirLight.position.copy(sunPosition).multiplyScalar(80);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.width = 2048;
+dirLight.shadow.mapSize.height = 2048;
+dirLight.shadow.camera.near = 0.5;
+dirLight.shadow.camera.far = 160;
+const d = 25;
+dirLight.shadow.camera.left = -d;
+dirLight.shadow.camera.right = d;
+dirLight.shadow.camera.top = d;
+dirLight.shadow.camera.bottom = -d;
+scene.add(dirLight);
+
+const ambientLight = new THREE.HemisphereLight(0x87ceeb, 0x0f172a, 0.65);
+scene.add(ambientLight);
+
+// ==========================================
+// 4. 高精度動態水面與木棧道場景
+// ==========================================
+// 建立高密度水面網格供頂點波浪計算
+const waterGeo = new THREE.PlaneGeometry(300, 300, 180, 180);
+waterGeo.rotateX(-Math.PI / 2);
+
+const waterMat = new THREE.MeshPhysicalMaterial({
+    color: 0x064e3b,
+    emissive: 0x022c22,
+    emissiveIntensity: 0.2,
+    roughness: 0.12,
+    metalness: 0.1,
+    transmission: 0.65,
+    ior: 1.333,
+    reflectivity: 0.9,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.08,
+    flatShading: false
+});
+
+const waterMesh = new THREE.Mesh(waterGeo, waterMat);
+waterMesh.receiveShadow = true;
+scene.add(waterMesh);
+
+// 精準計算任意 (x, z, time) 座標的水面波浪高度
+function getWaterHeight(x, z, time) {
+    const w1 = Math.sin(x * 0.25 + time * 1.8) * Math.cos(z * 0.2 + time * 1.4) * 0.12;
+    const w2 = Math.sin((x * 0.6 - z * 0.4) + time * 2.6) * 0.04;
+    const w3 = Math.cos(z * 0.8 + time * 3.2) * 0.02;
+    return w1 + w2 + w3;
+}
+
+// 更新水面頂點
+function updateWaterGeometry(time) {
+    const pos = waterGeo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+        const vx = pos.getX(i);
+        const vz = pos.getZ(i);
+        // 僅對視野核心區域進行高頻率波浪起伏
+        pos.setY(i, getWaterHeight(vx, vz, time));
+    }
+    pos.needsUpdate = true;
+    waterGeo.computeVertexNormals();
+}
+
+// 建造木製釣魚碼頭
+const dockGroup = new THREE.Group();
+const woodMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.85, metalness: 0.05 });
+const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x3b2313, roughness: 0.9 });
+
+for (let i = 0; i < 16; i++) {
+    const plank = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.12, 0.42), woodMat);
+    plank.position.set(0, 0.75, 7.0 - i * 0.46);
+    plank.castShadow = true;
+    plank.receiveShadow = true;
+    dockGroup.add(plank);
+}
+// 碼頭木樁
+[-1.6, 1.6].forEach(px => {
+    [1.0, 4.0, 6.8].forEach(pz => {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 3.2, 12), darkWoodMat);
+        post.position.set(px, 0.1, pz);
+        post.castShadow = true;
+        dockGroup.add(post);
+    });
+});
+scene.add(dockGroup);
+
+// 遠景島嶼山脈群
+const islandMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.95 });
+for (let i = 0; i < 9; i++) {
+    const radius = 12 + Math.random() * 25;
+    const height = 10 + Math.random() * 22;
+    const mountain = new THREE.Mesh(new THREE.ConeGeometry(radius, height, 7), islandMat);
+    const angle = (Math.PI * 0.2) + (i / 8) * (Math.PI * 0.6);
+    const dist = 95 + Math.random() * 40;
+    mountain.position.set(Math.cos(angle) * dist - 10, height * 0.35 - 2, -Math.sin(angle) * dist);
+    mountain.rotation.y = Math.random() * Math.PI;
+    scene.add(mountain);
+}
+
+// ==========================================
+// 5. 高精度複合釣竿與捲線器 (含彎曲骨骼點)
+// ==========================================
+const rodGroup = new THREE.Group();
+rodGroup.position.set(0.65, 1.55, 5.2); // 握持於畫面右下方
+scene.add(rodGroup);
+
+const rodPivot = new THREE.Group();
+rodGroup.add(rodPivot);
+
+// 釣竿握把與捲線器座
+const corkMat = new THREE.MeshStandardMaterial({ color: 0xd4a373, roughness: 0.75 });
+const carbonMat = new THREE.MeshPhysicalMaterial({ color: 0x111827, roughness: 0.2, metalness: 0.8, clearcoat: 1.0 });
+const goldMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.25, metalness: 0.9 });
+
+const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.038, 0.85, 16), corkMat);
+handle.rotation.x = -Math.PI / 2;
+handle.position.z = -0.3;
+rodPivot.add(handle);
+
+// 捲線器與旋轉搖臂
+const reelGroup = new THREE.Group();
+reelGroup.position.set(0, -0.08, -0.55);
+rodPivot.add(reelGroup);
+
+const reelBody = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.1, 20), carbonMat);
+reelBody.rotation.z = Math.PI / 2;
+reelGroup.add(reelBody);
+
+const reelSpool = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 0.07, 20), goldMat);
+reelSpool.rotation.z = Math.PI / 2;
+reelGroup.add(reelSpool);
+
+const reelCrank = new THREE.Group();
+reelCrank.position.set(-0.06, 0, 0);
+const crankArm = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.1, 0.02), goldMat);
+crankArm.position.y = 0.04;
+reelCrank.add(crankArm);
+reelGroup.add(reelCrank);
+
+// 分段式彈性竿身 (12 段節點，可依據釣線張力實時物理彎曲)
+const ROD_SEGMENTS = 12;
+const rodSegments = [];
+let parentNode = rodPivot;
+
+for (let i = 0; i < ROD_SEGMENTS; i++) {
+    const segGroup = new THREE.Group();
+    const segLen = 0.26;
+    segGroup.position.z = (i === 0) ? -0.7 : -segLen;
+
+    const rBottom = THREE.MathUtils.lerp(0.026, 0.005, i / ROD_SEGMENTS);
+    const rTop = THREE.MathUtils.lerp(0.026, 0.005, (i + 1) / ROD_SEGMENTS);
+    const segMesh = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBottom, segLen, 12), carbonMat);
+    segMesh.rotation.x = -Math.PI / 2;
+    segMesh.position.z = -segLen / 2;
+    segMesh.castShadow = true;
+    segGroup.add(segMesh);
+
+    // 導環 (Guides)
+    if (i % 2 === 1 || i === ROD_SEGMENTS - 1) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(rTop * 1.8 + 0.006, 0.0025, 8, 16), goldMat);
+        ring.position.set(0, -rTop - 0.012, -segLen);
+        segGroup.add(ring);
+    }
+
+    parentNode.add(segGroup);
+    rodSegments.push(segGroup);
+    parentNode = segGroup;
+}
+
+// 竿尖世界座標追蹤點
+const rodTipAnchor = new THREE.Object3D();
+rodTipAnchor.position.set(0, -0.015, -0.26);
+parentNode.add(rodTipAnchor);
+
+// ==========================================
+// 6. 高精度浮標、動態釣魚線與水花特效
+// ==========================================
+const bobberGroup = new THREE.Group();
+const bobberTop = new THREE.Mesh(
+    new THREE.SphereGeometry(0.11, 20, 16, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.2 })
+);
+const bobberBottom = new THREE.Mesh(
+    new THREE.SphereGeometry(0.11, 20, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.2 })
+);
+const bobberAntenna = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.012, 0.015, 0.28, 8),
+    new THREE.MeshBasicMaterial({ color: 0xfbbf24 })
+);
+bobberAntenna.position.y = 0.2;
+bobberGroup.add(bobberTop, bobberBottom, bobberAntenna);
+scene.add(bobberGroup);
+
+// 水面漣漪環 (Ripple Rings)
+const ripples = [];
+const rippleGeo = new THREE.RingGeometry(0.12, 0.18, 32);
+rippleGeo.rotateX(-Math.PI / 2);
+
+function spawnRipple(x, z, scaleSpeed = 1.8) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0xe2e8f0, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(rippleGeo, mat);
+    mesh.position.set(x, getWaterHeight(x, z, timer.getElapsed()) + 0.03, z);
+    scene.add(mesh);
+    ripples.push({ mesh, age: 0, speed: scaleSpeed });
+}
+
+// 動態彈性釣魚線 (40 個採樣點)
+const LINE_POINTS = 40;
+const linePositions = new Float32Array(LINE_POINTS * 3);
+const lineGeo = new THREE.BufferGeometry();
+lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
+const lineMat = new THREE.LineBasicMaterial({ color: 0xe2e8f0, transparent: true, opacity: 0.85 });
+const fishingLine = new THREE.Line(lineGeo, lineMat);
+fishingLine.frustumCulled = false;
+scene.add(fishingLine);
+
+// ==========================================
+// 7. 水下魚影與 3D 實體魚模型
+// ==========================================
+const fishMeshGroup = new THREE.Group();
+scene.add(fishMeshGroup);
+fishMeshGroup.visible = false;
+
+function buildFishModel(bodyColorHex, finColorHex, scale = 1.0) {
+    fishMeshGroup.clear();
+
+    const bodyMat = new THREE.
